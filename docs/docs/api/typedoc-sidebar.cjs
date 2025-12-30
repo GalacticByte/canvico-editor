@@ -1,4 +1,0 @@
-// @ts-check
-/** @type {import("@docusaurus/plugin-content-docs").SidebarsConfig} */
-const typedocSidebar = {items:[{type:"category",label:"Classes",items:[{type:"doc",id:"api/classes/CanvicoEditor",label:"CanvicoEditor"}]},{type:"category",label:"Interfaces",items:[{type:"doc",id:"api/interfaces/IModule",label:"IModule"}]},{type:"category",label:"Type Aliases",items:[{type:"doc",id:"api/type-aliases/CanvicoEditorConfig",label:"CanvicoEditorConfig"},{type:"doc",id:"api/type-aliases/CropModuleConfig",label:"CropModuleConfig"},{type:"doc",id:"api/type-aliases/ModuleConfig",label:"ModuleConfig"},{type:"doc",id:"api/type-aliases/ModuleEventHandler",label:"ModuleEventHandler"},{type:"doc",id:"api/type-aliases/ResizeModuleConfig",label:"ResizeModuleConfig"}]}]};
-module.exports = typedocSidebar.items;
