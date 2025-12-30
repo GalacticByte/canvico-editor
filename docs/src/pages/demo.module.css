@@ -1,0 +1,230 @@
+.demoContainer {
+    padding: 2rem;
+    width: 100%;
+    max-width: 1800px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.header {
+    margin-bottom: 2rem;
+}
+
+.headerTitle {
+    margin-bottom: 0.5rem;
+    /* Uses Docusaurus theme variable for consistency */
+    color: var(--ifm-color-primary);
+}
+
+.headerDesc {
+    font-size: 1.2rem;
+    /* Uses Docusaurus theme variable for secondary text color */
+    color: var(--ifm-color-content-secondary);
+}
+
+.canvico-container {
+    border: 2px dashed var(--ifm-color-primary);
+    background-color: var(--ifm-background-color);
+    min-height: 500px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0; /* Reset margin as it's now a grid item */
+}
+
+.mainLayout {
+    display: grid;
+    /* A sidebar for tools and the main area for the editor */
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    align-items: start;
+    text-align: left; /* Reset text-align from parent */
+}
+
+@media (max-width: 996px) {
+    .mainLayout {
+        grid-template-columns: 1fr; /* Stack on smaller screens */
+        gap: 1.5rem;
+    }
+}
+
+.toolsContainer {
+    background-color: var(--ifm-background-surface-color);
+    padding: 1.5rem;
+    border-radius: var(--ifm-card-border-radius);
+    border: 1px solid var(--ifm-color-primary-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    height: 100%;
+}
+
+.controlGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.groupLabel {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--ifm-color-content-secondary);
+    text-align: left;
+    text-transform: uppercase;
+    margin-bottom: -0.25rem;
+}
+
+.moduleSubGroup {
+    padding: 1rem;
+    border: 1px solid var(--ifm-color-primary-muted);
+    border-radius: var(--ifm-card-border-radius);
+    background-color: var(--ifm-background-color);
+}
+
+.subGroupLabel {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem 0;
+    color: var(--ifm-color-primary);
+}
+
+.groupContent,
+.mainActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+/* Specific alignment for the first group */
+.mainActions {
+    justify-content: flex-start;
+}
+
+.controlButton {
+    composes: button button--primary from global;
+    border-color: var(--ifm-color-primary);
+    color: #fff;
+    background-color: var(--ifm-color-primary);
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+.controlButton:hover,
+.controlButton:focus,
+.controlButton:focus-visible {
+    background-color: var(--ifm-color-primary-lightest);
+    color: #000;
+}
+
+.saveButton {
+    /* Use Docusaurus button styles as a base */
+    composes: button button--primary from global;
+    /* Override with your accent color for emphasis */
+    background-color: var(--canvico-color-accent-gold);
+    border-color: var(--canvico-color-accent-gold);
+    color: #000; /* Use black text for better contrast on gold background */
+}
+
+.saveButton:hover {
+    background-color: #c88418; /* A slightly darker shade for hover */
+    border-color: #c88418;
+}
+
+.fileInputContainer {
+    position: relative;
+    display: inline-block;
+    cursor: pointer;
+}
+
+.fileInputLabel {
+    composes: controlButton;
+}
+
+.fileInputContainer:hover .fileInputLabel {
+    background-color: var(--ifm-color-primary-lightest);
+    color: #000;
+}
+
+.fileInput {
+    /* Hide the default input but keep it accessible and functional */
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer; /* Ensure the input itself shows a pointer cursor */
+}
+
+.controlLabel {
+    font-weight: 500;
+    margin-left: 0.5rem;
+}
+
+.sizeInput {
+    /* Basic styling for text inputs */
+    padding: 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--ifm-color-primary-muted);
+    background-color: var(--ifm-background-color);
+    color: var(--ifm-font-color-base);
+    max-width: 80px;
+}
+
+.checkboxLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.checkboxInput {
+    /* Hide the real checkbox but keep it functional */
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.customCheckbox {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--ifm-color-emphasis-500);
+    border-radius: 4px;
+    display: inline-block;
+    position: relative;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.checkboxInput:checked + .customCheckbox {
+    background-color: var(--canvico-color-accent-gold);
+    border-color: var(--canvico-color-accent-gold);
+}
+
+.customCheckbox::after {
+    content: "";
+    position: absolute;
+    display: none;
+    /* Centering the checkmark */
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -60%) rotate(45deg);
+    width: 5px;
+    height: 10px;
+    border: solid white;
+    border-width: 0 3px 3px 0;
+}
+
+.checkboxInput:checked + .customCheckbox::after {
+    display: block;
+}
+
+.separator {
+    width: 1px;
+    background-color: var(--ifm-color-primary-muted);
+    align-self: stretch;
+}
