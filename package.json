@@ -2,7 +2,7 @@
     "name": "canvico-editor",
     "description": "A simple and extensible image editor built with TypeScript and the Canvas API. Designed with modularity and developer experience in mind, it separates DOM logic from business logic, provides strong typing, and includes robust error handling. Easily integrable into web projects.",
     "private": false,
-    "version": "1.0.2",
+    "version": "1.0.3",
     "type": "module",
     "types": "dist/index.d.ts",
     "exports": {
