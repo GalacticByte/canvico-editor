@@ -2,11 +2,11 @@
 
 [![NPM Version](https://img.shields.io/npm/v/canvico-editor.svg)](https://www.npmjs.com/package/canvico-editor)
 
-A simple and extensible image editor built with TypeScript and the Canvas API. Designed with modularity and developer experience in mind, it separates DOM logic from business logic, provides strong typing, and includes robust error handling. Easily integrable into web projects and a showcase of advanced TypeScript patterns.
+A simple and extensible image editor built with TypeScript and the Canvas API. Designed with modularity and developer experience in mind, it separates DOM logic from business logic, provides strong typing, and includes robust error handling. Easily integrable into web projects.
 
 ## Features
 
--   **Image Loading**: Load images from a local file input, URL, or `File` object.
+-   **Image Loading**: Load images from a local file input.
 -   **Resizing**: Dynamically resize the image with an option to keep the aspect ratio.
 -   **Cropping**: User-friendly crop tool with a movable and resizable selection box.
 -   **Saving**: Download the edited image as a PNG file.
