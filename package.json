@@ -2,7 +2,7 @@
     "name": "canvico-editor",
     "description": "A simple and extensible image editor built with TypeScript and the Canvas API. Designed with modularity and developer experience in mind, it separates DOM logic from business logic, provides strong typing, and includes robust error handling. Easily integrable into web projects.",
     "private": false,
-    "version": "1.0.3",
+    "version": "2.0.0",
     "type": "module",
     "types": "dist/index.d.ts",
     "exports": {
@@ -47,14 +47,16 @@
         "docs:serve": "cd docs && npm run serve",
         "docs:api": "cd docs && npm run build",
         "release:patch": "npm run build && npm version patch && git push --follow-tags",
+        "release:minor": "npm run build && npm version minor && git push --follow-tags",
+        "release:major": "npm run build && npm version major && git push --follow-tags",
         "prepublishOnly": "vite build",
         "publish:package": "npm publish",
         "build:watch": "vite build --watch"
     },
     "devDependencies": {
-        "@types/node": "^25.0.3",
+        "@types/node": "^25.3.2",
         "typescript": "~5.9.3",
-        "vite": "^7.2.4",
-        "vite-plugin-dts": "^4.5.0"
+        "vite": "^7.3.1",
+        "vite-plugin-dts": "^4.5.4"
     }
 }

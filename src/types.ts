@@ -30,6 +30,18 @@ export type CropModuleConfig = {
 };
 
 /**
+ * Configuration options for the Transform module.
+ */
+export type TransformModuleConfig = {
+    /** Optional CSS selector for rotate input (degrees). */
+    rotateInputSelector?: string;
+    /** Optional CSS selector for flip horizontal button. */
+    flipHorizontalButtonSelector?: string;
+    /** Optional CSS selector for flip vertical button. */
+    flipVerticalButtonSelector?: string;
+};
+
+/**
  * A container for all module-specific configuration options.
  */
 export type ModuleConfig = {
@@ -37,7 +49,20 @@ export type ModuleConfig = {
     resize?: ResizeModuleConfig;
     /** Configuration for the Crop module. */
     crop?: CropModuleConfig;
+    /** Configuration for the Transform module. */
+    transform?: TransformModuleConfig;
 };
+
+export type CanvicoEditorErrorSource = "editor" | "dom" | "resize" | "crop" | "transform" | "validation" | "state";
+
+export type CanvicoEditorErrorReport = {
+    error: Error;
+    source: CanvicoEditorErrorSource;
+    operation?: string;
+    timestamp: Date;
+};
+
+export type CanvicoEditorErrorCallback = (report: CanvicoEditorErrorReport) => void;
 
 /**
  * The main configuration object for the CanvicoEditor.
@@ -55,8 +80,20 @@ export type CanvicoEditorConfig = {
     clearCanvasButtonSelector: string;
     /** Optional maximum allowed file size in megabytes (MB). */
     maxFileSizeMB?: number;
+    /**
+     * When true, invalid module selectors throw during initialization
+     * (fail-fast behavior).
+     * When false, invalid module selectors disable only the affected module
+     * and report the error through the editor error pipeline.
+     * Defaults to `false`.
+     */
+    strictModuleSelectors?: boolean;
     /** Optional container for all module configurations. */
     modules?: ModuleConfig;
+    /** Optional callback to report handled runtime errors to host application. */
+    onError?: CanvicoEditorErrorCallback;
+    /** Controls whether handled errors are printed to console. Defaults to `true`. */
+    logErrorsToConsole?: boolean;
 };
 
 /**

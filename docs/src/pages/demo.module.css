@@ -22,6 +22,18 @@
     color: var(--ifm-color-content-secondary);
 }
 
+.errorNotice {
+    margin: 1rem auto 0;
+    max-width: 900px;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: 1px solid #b75f5f;
+    background: #3f2323;
+    color: #ffd8d8;
+    font-size: 0.95rem;
+    text-align: left;
+}
+
 .canvico-container {
     border: 2px dashed var(--ifm-color-primary);
     background-color: var(--ifm-background-color);
@@ -81,6 +93,67 @@
     border: 1px solid var(--ifm-color-primary-muted);
     border-radius: var(--ifm-card-border-radius);
     background-color: var(--ifm-background-color);
+}
+
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--ifm-color-primary-muted);
+    padding-bottom: 0.5rem;
+}
+
+.tabButton {
+    composes: button button--sm from global;
+    background-color: transparent;
+    color: var(--ifm-color-primary);
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: var(--ifm-card-border-radius) var(--ifm-card-border-radius) 0 0;
+    padding: 0.4rem 0.9rem;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+}
+
+.tabButton:hover,
+.tabButton:focus,
+.tabButton:focus-visible {
+    background-color: var(--ifm-color-primary-lightest);
+    color: #000;
+}
+
+.tabButtonActive {
+    background-color: var(--ifm-color-primary);
+    color: #fff;
+    border-color: var(--ifm-color-primary);
+}
+
+.tabContent {
+    padding-top: 1rem;
+}
+
+.tabPane {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.tabPaneHidden {
+    display: none;
+}
+
+.tabSection {
+    padding: 0.9rem;
+    border: 1px solid var(--ifm-color-primary-muted);
+    border-radius: var(--ifm-card-border-radius);
+    background-color: var(--ifm-background-color);
+}
+
+.sectionLabel {
+    display: block;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    color: var(--ifm-color-content-secondary);
+    margin-bottom: 0.6rem;
 }
 
 .subGroupLabel {
@@ -173,6 +246,7 @@
     color: var(--ifm-font-color-base);
     max-width: 80px;
 }
+
 
 .checkboxLabel {
     display: flex;

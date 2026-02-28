@@ -6,13 +6,21 @@ A simple and extensible image editor built with TypeScript and the Canvas API. D
 
 ## Features
 
--   **Image Loading**: Load images from a local file input.
--   **Resizing**: Dynamically resize the image with an option to keep the aspect ratio.
--   **Cropping**: User-friendly crop tool with a movable and resizable selection box.
--   **Saving**: Download the edited image as a PNG file.
--   **Modularity**: Easily extend the editor with new modules (e.g., filters, text, etc.).
--   **Robust Error Handling**: Centralized error management for consistent and descriptive messages.
--   **Strong Typing**: Fully typed API for improved Developer Experience.
+- **Canvas Editing Core**: Load, resize, crop, rotate, flip, and export images in-browser.
+- **Cross-Input Crop UX**: Crop interactions support mouse and touch input.
+- **Modular Design**: Resize, Crop, and Transform are isolated modules for easier maintenance and extension.
+- **State-Driven Architecture**: Central `CanvasState` store with reducer-based updates for predictable editor behavior.
+- **Type-Safe API**: Fully typed configuration and public interfaces for better DX in TypeScript projects.
+- **Input Validation**: Built-in file type and file size checks before processing.
+- **Structured Error Reporting**: Optional `onError` callback with contextual metadata (`source`, `operation`, `timestamp`).
+- **Flexible Logging**: Toggle internal console logging with `logErrorsToConsole`.
+- **Lifecycle-Safe Cleanup**: `destroy()` removes internal listeners and avoids leaking host app handlers.
+
+Behavior note:
+Resize values and aspect-ratio lock work in output image space (`currentImage` dimensions), while the on-screen canvas is a fit-to-container preview.
+
+Supported input formats:
+`image/jpeg`, `image/png`, `image/webp`.
 
 ## Installation
 
@@ -28,11 +36,18 @@ npm install canvico-editor
 import { CanvicoEditor } from "canvico-editor";
 
 const canvico = new CanvicoEditor({
-    containerSelector: `.canvico-containerr`,
+    containerSelector: `.canvico-container`,
     imageFileInputSelector: ".input-upload-file",
     resetEditsButtonSelector: "#resetEdit",
     clearCanvasButtonSelector: "#cleanAll",
     saveButtonSelector: "#saveBtn",
+    maxFileSizeMB: 5,
+    strictModuleSelectors: true, // optional: fail fast on invalid module selectors
+    logErrorsToConsole: true,
+    onError: ({ error, source, operation, timestamp }) => {
+        // Integrate with your logger/monitoring tool here
+        console.error("[CanvicoEditor]", timestamp.toISOString(), source, operation, error);
+    },
     modules: {
         resize: {
             widthInputSelector: "#widthInput",
@@ -45,8 +60,16 @@ const canvico = new CanvicoEditor({
             frameColor: "#d84cb9",
             outsideOverlayColor: "rgba(0,0,0,0.2)",
         },
+        transform: {
+            rotateInputSelector: "#rotateDeg",
+            flipHorizontalButtonSelector: "#flipH",
+            flipVerticalButtonSelector: "#flipV",
+        },
     },
 });
+
+// In SPA/framework apps, clean up on unmount:
+// canvico.destroy();
 ```
 
 ## Documentation

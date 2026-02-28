@@ -19,3 +19,11 @@ Configuration for the Crop module.
 > `optional` **resize**: [`ResizeModuleConfig`](ResizeModuleConfig.md)
 
 Configuration for the Resize module.
+
+***
+
+### transform?
+
+> `optional` **transform**: [`TransformModuleConfig`](TransformModuleConfig.md)
+
+Configuration for the Transform module.
