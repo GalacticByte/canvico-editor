@@ -1,4 +1,5 @@
 import type { CropDOMElements } from "../utils/dom-manager.js";
+import { CanvasState, CropHandle, CropRect } from "../state/CanvasState.js";
 import { BaseModule } from "./BaseModule.js";
 
 // --- TYPE DEFINITIONS ---
@@ -9,9 +10,8 @@ import { BaseModule } from "./BaseModule.js";
 export interface CropModuleOptions {
     canvas: HTMLCanvasElement;
     ctx: CanvasRenderingContext2D;
-    getCurrentImage: () => HTMLImageElement | undefined;
-    requestRedraw?: () => void;
-    onCropApplied: (newImageDataUrl: string) => void;
+    state: CanvasState;
+    onCropApplied: () => void;
     frameColor?: string;
     outsideOverlayColor?: string;
 }
@@ -19,23 +19,11 @@ export interface CropModuleOptions {
 /**
  * Enum representing the four resize handles of the crop rectangle.
  */
-
 enum Handle {
     NW = "nw",
     NE = "ne",
     SW = "sw",
     SE = "se",
-}
-
-/**
- * Represents a rectangle with position (x, y) and dimensions (w, h).
- */
-
-interface Rect {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
 }
 
 /**
@@ -47,39 +35,32 @@ export class CropModule extends BaseModule {
     // --- PROPERTIES ---
 
     /** Core Dependencies */
-    private canvas: HTMLCanvasElement;
+    private readonly canvas: HTMLCanvasElement;
 
-    private ctx: CanvasRenderingContext2D;
+    private readonly ctx: CanvasRenderingContext2D;
 
-    private applyButton: HTMLElement;
+    private readonly applyButton: HTMLElement;
 
-    private getCurrentImage: () => HTMLImageElement | undefined;
+    private readonly state: CanvasState;
 
-    private requestRedraw?: () => void;
-
-    private onCropAppliedCallback: (newImageDataUrl: string) => void;
+    private readonly onCropAppliedCallback: () => void;
 
     // Configuration
-    private frameColor: string;
-    private outsideOverlayColor: string;
+    private readonly frameColor: string;
+    private readonly outsideOverlayColor: string;
 
     private readonly HANDLE_SIZE = 8;
     private readonly MIN_CROP_SIZE = this.HANDLE_SIZE * 2;
 
-    // State
-
-    private cropMode = false;
-
-    private cropRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-
+    private isLocalActive = false;
     private dragging = false;
     private dragOffsetX = 0;
     private dragOffsetY = 0;
-    /** The handle currently being dragged, or "rect" for the whole rectangle. */
-    private activeHandle: Handle | "rect" | null = null;
+    private activeHandle: CropHandle = null;
     private shiftPressed = false;
     private lastMouseX = 0;
     private lastMouseY = 0;
+    private previousTouchAction = "";
 
     // --- CONSTRUCTOR & LIFECYCLE METHODS ---
 
@@ -93,8 +74,7 @@ export class CropModule extends BaseModule {
         this.canvas = options.canvas;
         this.ctx = options.ctx;
 
-        this.getCurrentImage = options.getCurrentImage;
-        this.requestRedraw = options.requestRedraw;
+        this.state = options.state;
         this.onCropAppliedCallback = options.onCropApplied;
 
         this.applyButton = elements.applyButton;
@@ -107,13 +87,22 @@ export class CropModule extends BaseModule {
      */
     public init(): void {
         this.addEventListener(this.applyButton, "click", this._applyCrop);
+        this.addEventListener(this.canvas, "mousedown", this._onMouseDown);
+        this.addEventListener(this.canvas, "mousemove", this._onMouseMove);
+        this.addEventListener(globalThis, "mouseup", this._onMouseUp);
+        this.addEventListener(globalThis, "keydown", this._onKeyDown);
+        this.addEventListener(globalThis, "keyup", this._onKeyUp);
+        this.addEventListener(this.canvas, "touchstart", this._onTouchStart, { passive: false });
+        this.addEventListener(this.canvas, "touchmove", this._onTouchMove, { passive: false });
+        this.addEventListener(globalThis, "touchend", this._onTouchEnd, { passive: false });
+        this.addEventListener(globalThis, "touchcancel", this._onTouchCancel, { passive: false });
     }
 
     /**
      * Cleans up resources and event listeners.
      */
     public destroy(): void {
-        this.deactivate(); // Ensure all listeners are removed
+        this.deactivate(); // Reset crop state before final listener cleanup
         super.destroy();
     }
 
@@ -123,75 +112,71 @@ export class CropModule extends BaseModule {
      * Activates the crop module, making it ready for user interaction.
      */
     public activate(): void {
-        this.enableCropMode();
+        this._enableCropMode();
     }
 
     /**
      * Deactivates the crop module.
      */
     public deactivate(): void {
-        this.disableCropMode();
-    }
-
-    /**
-     * Checks if the crop mode is currently active.
-     * @returns True if crop mode is active, false otherwise.
-     */
-    public isCropModeActive(): boolean {
-        return this.cropMode;
+        this._disableCropMode();
     }
 
     /**
      * Enables crop mode.
-     * This initializes the crop rectangle to a default size and adds all necessary event listeners for interaction.
-     * Enables crop mode, initializing the crop rectangle and adding event listeners.
+     * This initializes the crop rectangle to a default size.
      */
-    public enableCropMode(): void {
-        if (!this.getCurrentImage() || this.cropMode) {
+    private _enableCropMode(): void {
+        // Prevent double activation which causes event listener leaks and crashes
+        if (this.isLocalActive || !this.state.getCurrent()) {
             return;
         }
+        this.isLocalActive = true;
+        this.dragging = false;
+        this.dragOffsetX = 0;
+        this.dragOffsetY = 0;
+        this.activeHandle = null;
+        this.shiftPressed = false;
+        this.lastMouseX = 0;
+        this.lastMouseY = 0;
+        this.previousTouchAction = this.canvas.style.touchAction;
+        this.canvas.style.touchAction = "none";
 
-        this.cropMode = true;
-
-        // Initialize crop rectangle: centered, half of canvas size
+        // Always reset crop rectangle to fit the CURRENT canvas size (with a small margin).
+        // We do not restore previous rects because the image might have been transformed (rotated/resized).
         const cw = this.canvas.width;
         const ch = this.canvas.height;
-        this.cropRect = { x: cw / 4, y: ch / 4, w: cw / 2, h: ch / 2 };
-        this.shiftPressed = false;
 
-        // Add event listeners
-        this.canvas.addEventListener("mousedown", this._onMouseDown);
-        this.canvas.addEventListener("mousemove", this._onMouseMove);
-        window.addEventListener("mouseup", this._onMouseUp);
-        window.addEventListener("keydown", this.onKeyDown);
-        window.addEventListener("keyup", this._onKeyUp);
+        // Use 60% of the smaller dimension to ensure it fits safely and is a square
+        const size = Math.min(cw, ch) * 0.6;
 
-        this.requestRedraw?.();
+        this.state.setCropState({
+            active: true,
+            rect: { x: (cw - size) / 2, y: (ch - size) / 2, w: size, h: size },
+        });
     }
 
     /**
      * Disables crop mode.
-     * This resets the module's state and removes all event listeners related to cropping.
-     * Disables crop mode, resetting state and removing event listeners.
+     * This resets the module's state.
      */
-    public disableCropMode(): void {
-        if (!this.cropMode) return;
+    private _disableCropMode(): void {
+        if (!this.isLocalActive && !this.state.getCropState().active) return;
 
-        this.cropMode = false;
+        this.isLocalActive = false;
         this.dragging = false;
+        this.dragOffsetX = 0;
+        this.dragOffsetY = 0;
         this.activeHandle = null;
-
-        // Remove event listeners
-        this.canvas.removeEventListener("mousedown", this._onMouseDown);
-        this.canvas.removeEventListener("mousemove", this._onMouseMove);
-        window.removeEventListener("mouseup", this._onMouseUp);
-        window.removeEventListener("keydown", this.onKeyDown);
-        window.removeEventListener("keyup", this._onKeyUp);
+        this.shiftPressed = false;
+        this.lastMouseX = 0;
+        this.lastMouseY = 0;
+        this.canvas.style.touchAction = this.previousTouchAction;
+        const rect = this._getCropRect();
+        this.state.setCropState({ active: false, rect: { ...rect } });
 
         // Restore default cursor
         this.canvas.style.cursor = "default";
-
-        this.requestRedraw?.();
     }
 
     // --- EVENT HANDLERS ---
@@ -200,10 +185,13 @@ export class CropModule extends BaseModule {
      * Handles the keydown event, specifically for the Shift key to toggle aspect ratio lock.
      * @internal
      */
-    public onKeyDown = (e: KeyboardEvent): void => {
+    private readonly _onKeyDown = (e: KeyboardEvent): void => {
+        if (!this.state.getCropState().active) {
+            return;
+        }
         if (e.key === "Shift") {
             this.shiftPressed = true;
-            // Redraw with aspect ratio constraint if currently dragging
+            // Recalculate current drag with square constraint.
             if (this.dragging) {
                 this._handleDrag(this.lastMouseX, this.lastMouseY);
             }
@@ -214,10 +202,10 @@ export class CropModule extends BaseModule {
      * Handles the keyup event, specifically for the Shift key to toggle aspect ratio lock.
      * @param e - The keyboard event.
      */
-    private _onKeyUp = (e: KeyboardEvent): void => {
-        if (e.key === "Shift" && this.cropMode) {
+    private readonly _onKeyUp = (e: KeyboardEvent): void => {
+        if (e.key === "Shift" && this.state.getCropState().active) {
             this.shiftPressed = false;
-            // Redraw without aspect ratio constraint if currently dragging
+            // Recalculate current drag without square constraint.
             if (this.dragging) {
                 this._handleDrag(this.lastMouseX, this.lastMouseY);
             }
@@ -228,21 +216,22 @@ export class CropModule extends BaseModule {
      * Handles the mousedown event to initiate dragging or resizing of the crop rectangle.
      * @param event - The mouse event.
      */
-    private _onMouseDown = (event: MouseEvent): void => {
-        if (!this.cropMode) return;
+    private readonly _onMouseDown = (event: MouseEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active) return;
 
         const mx = event.offsetX;
         const my = event.offsetY;
 
-        this.activeHandle = this._detectHandle(mx, my);
+        const activeHandle = this._detectHandle(mx, my);
 
         // Start dragging if a handle or the rectangle itself is clicked
-        if (this.activeHandle) {
+        if (activeHandle) {
+            const rect = this._getCropRect();
             this.dragging = true;
-            if (this.activeHandle === "rect") {
-                this.dragOffsetX = mx - this.cropRect.x;
-                this.dragOffsetY = my - this.cropRect.y;
-            }
+            this.activeHandle = activeHandle;
+            this.dragOffsetX = activeHandle === "rect" ? mx - rect.x : 0;
+            this.dragOffsetY = activeHandle === "rect" ? my - rect.y : 0;
         }
     };
 
@@ -250,16 +239,18 @@ export class CropModule extends BaseModule {
      * Handles the mousemove event to update the crop rectangle during drag/resize and to update the cursor style.
      * @param event - The mouse event.
      */
-    private _onMouseMove = (event: MouseEvent): void => {
+    private readonly _onMouseMove = (event: MouseEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active) {
+            return;
+        }
         this.lastMouseX = event.offsetX;
         this.lastMouseY = event.offsetY;
 
         // If not dragging, just update the cursor based on position
-        if (!this.cropMode || !this.dragging || !this.activeHandle) {
-            if (this.cropMode) {
-                const handle = this._detectHandle(event.offsetX, event.offsetY);
-                this._updateCursor(handle);
-            }
+        if (!this.dragging || !this.activeHandle) {
+            const handle = this._detectHandle(event.offsetX, event.offsetY);
+            this._updateCursor(handle);
             return;
         }
         // If dragging, handle the drag/resize logic
@@ -269,16 +260,84 @@ export class CropModule extends BaseModule {
     /**
      * Handles the mouseup event to finalize the drag/resize operation and normalize the crop rectangle.
      */
-    private _onMouseUp = (): void => {
-        if (!this.cropMode || !this.dragging) {
+    private readonly _onMouseUp = (): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active || !this.dragging) {
             return;
         }
         this.dragging = false;
         this.activeHandle = null;
 
         this._normalizeCropRect();
+    };
 
-        this.requestRedraw?.();
+    private readonly _onTouchStart = (event: TouchEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active) {
+            return;
+        }
+
+        const point = this._getTouchPoint(event);
+        if (!point) {
+            return;
+        }
+        event.preventDefault();
+
+        const activeHandle = this._detectHandle(point.x, point.y);
+        if (activeHandle) {
+            const rect = this._getCropRect();
+            this.dragging = true;
+            this.activeHandle = activeHandle;
+            this.dragOffsetX = activeHandle === "rect" ? point.x - rect.x : 0;
+            this.dragOffsetY = activeHandle === "rect" ? point.y - rect.y : 0;
+            this.lastMouseX = point.x;
+            this.lastMouseY = point.y;
+        }
+    };
+
+    private readonly _onTouchMove = (event: TouchEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active) {
+            return;
+        }
+
+        const point = this._getTouchPoint(event);
+        if (!point) {
+            return;
+        }
+        event.preventDefault();
+
+        this.lastMouseX = point.x;
+        this.lastMouseY = point.y;
+
+        if (!this.dragging || !this.activeHandle) {
+            return;
+        }
+        this._handleDrag(this.lastMouseX, this.lastMouseY);
+    };
+
+    private readonly _onTouchEnd = (event: TouchEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active || !this.dragging) {
+            return;
+        }
+        event.preventDefault();
+        this.dragging = false;
+        this.activeHandle = null;
+
+        this._normalizeCropRect();
+    };
+
+    private readonly _onTouchCancel = (event: TouchEvent): void => {
+        const cropState = this.state.getCropState();
+        if (!cropState.active || !this.dragging) {
+            return;
+        }
+        event.preventDefault();
+        this.dragging = false;
+        this.activeHandle = null;
+
+        this._normalizeCropRect();
     };
 
     // --- PRIVATE LOGIC ---
@@ -289,52 +348,14 @@ export class CropModule extends BaseModule {
      * @param my - The current mouse Y position.
      */
     private _handleDrag(mx: number, my: number): void {
-        let { x, y, w, h } = this.cropRect;
-
-        if (this.activeHandle === "rect") {
-            x = mx - this.dragOffsetX;
-            y = my - this.dragOffsetY;
-        } else {
-            const handle = this.activeHandle;
-            switch (handle) {
-                case Handle.NW:
-                    w += x - mx;
-                    h += y - my;
-                    x = mx;
-                    y = my;
-                    break;
-                case Handle.NE:
-                    w = mx - x;
-                    h += y - my;
-                    y = my;
-                    break;
-                case Handle.SW:
-                    w += x - mx;
-                    h = my - y;
-                    x = mx;
-                    break;
-                case Handle.SE:
-                    w = mx - x;
-                    h = my - y;
-                    break;
-            }
-
-            if (this.shiftPressed) {
-                const absW = Math.abs(w);
-                const absH = Math.abs(h);
-                const signW = w < 0 ? -1 : 1;
-                const signH = h < 0 ? -1 : 1;
-
-                if (absW > absH) {
-                    h = signH * absW;
-                } else {
-                    w = signW * absH;
-                }
-            }
+        if (!this.activeHandle) {
+            return;
         }
+        const nextRect = this.activeHandle === "rect"
+            ? this._moveRect(this._getCropRect(), mx, my, this.dragOffsetX, this.dragOffsetY)
+            : this._resizeRect(this._getCropRect(), mx, my, this.activeHandle as Handle, this.shiftPressed);
 
-        this.cropRect = { x, y, w, h };
-        this.requestRedraw?.();
+        this._setCropRect(nextRect);
     }
 
     /**
@@ -342,78 +363,48 @@ export class CropModule extends BaseModule {
      * Ensures width and height are positive and clamps the rectangle to canvas boundaries.
      */
     private _normalizeCropRect(): void {
+        const cropRect = { ...this._getCropRect() };
+        const canvasWidth = Math.max(1, this.canvas.width);
+        const canvasHeight = Math.max(1, this.canvas.height);
+        const minWidth = Math.min(this.MIN_CROP_SIZE, canvasWidth);
+        const minHeight = Math.min(this.MIN_CROP_SIZE, canvasHeight);
+        const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
+
         // Ensure width and height are positive
-        if (this.cropRect.w < 0) {
-            this.cropRect.x += this.cropRect.w;
-            this.cropRect.w = Math.abs(this.cropRect.w);
+        if (cropRect.w < 0) {
+            cropRect.x += cropRect.w;
+            cropRect.w = Math.abs(cropRect.w);
         }
-        if (this.cropRect.h < 0) {
-            this.cropRect.y += this.cropRect.h;
-            this.cropRect.h = Math.abs(this.cropRect.h);
+        if (cropRect.h < 0) {
+            cropRect.y += cropRect.h;
+            cropRect.h = Math.abs(cropRect.h);
         }
 
-        // Enforce minimum size
-        if (this.cropRect.w < this.MIN_CROP_SIZE) this.cropRect.w = this.MIN_CROP_SIZE;
-        if (this.cropRect.h < this.MIN_CROP_SIZE) this.cropRect.h = this.MIN_CROP_SIZE;
+        // Clamp position first so minimum size can still be enforced near canvas edges.
+        cropRect.x = clamp(cropRect.x, 0, canvasWidth - minWidth);
+        cropRect.y = clamp(cropRect.y, 0, canvasHeight - minHeight);
 
-        // Clamp to canvas boundaries
-        this.cropRect.x = Math.max(0, this.cropRect.x);
-        this.cropRect.y = Math.max(0, this.cropRect.y);
-        if (this.cropRect.x + this.cropRect.w > this.canvas.width) {
-            this.cropRect.w = this.canvas.width - this.cropRect.x;
-        }
-        if (this.cropRect.y + this.cropRect.h > this.canvas.height) {
-            this.cropRect.h = this.canvas.height - this.cropRect.y;
-        }
+        // Then clamp dimensions to [min, available-space].
+        const maxWidth = canvasWidth - cropRect.x;
+        const maxHeight = canvasHeight - cropRect.y;
+        cropRect.w = clamp(cropRect.w, minWidth, maxWidth);
+        cropRect.h = clamp(cropRect.h, minHeight, maxHeight);
+
+        this._setCropRect(cropRect);
     }
 
     /**
      * Applies the crop and provides the new image data URL to the callback.
      */
-    private _applyCrop = (): void => {
-        const img = this.getCurrentImage();
-        if (!img || !this.cropMode || this.cropRect.w === 0 || this.cropRect.h === 0) {
+    private readonly _applyCrop = (): void => {
+        const rect = this._getCropRect();
+        if (!this.state.getCropState().active || rect.w === 0 || rect.h === 0) {
             this.deactivate();
             return;
         }
 
-        // Use a normalized rectangle for cropping
-        const { x, y, w, h } = this._getVisualRect();
-
-        // Map canvas coordinates to the original image's coordinates.
-        // This is crucial if the displayed image is scaled to fit the canvas.
-        const scaleX = img.naturalWidth / this.canvas.width;
-        const scaleY = img.naturalHeight / this.canvas.height;
-
-        const sx = x * scaleX;
-        const sy = y * scaleY;
-        const sw = w * scaleX;
-        const sh = h * scaleY;
-
-        if (sw <= 0 || sh <= 0) {
-            console.error("Crop dimensions are invalid for applying crop.");
-            this.deactivate();
-            return;
-        }
-
-        // Create an off-screen canvas to draw the cropped image
-        const offscreenCanvas = document.createElement("canvas");
-        offscreenCanvas.width = sw;
-        offscreenCanvas.height = sh;
-        const offCtx = offscreenCanvas.getContext("2d");
-
-        if (!offCtx) {
-            console.error("Failed to get 2D context for offscreen canvas");
-            return;
-        }
-
-        // Draw the cropped portion of the original image onto the off-screen canvas
-        offCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-
-        // Pass the new image data URL to the callback
-        this.onCropAppliedCallback(offscreenCanvas.toDataURL());
-
-        // The main application will handle deactivating the module after the new image is loaded.
+        // Notify the editor to apply the crop based on the current state
+        this.onCropAppliedCallback();
     };
 
     // --- DRAWING & HELPER METHODS ---
@@ -422,7 +413,7 @@ export class CropModule extends BaseModule {
      * Draws the crop overlay, including the semi-transparent mask, border, and handles.
      */
     public drawOverlay(): void {
-        if (!this.cropMode) {
+        if (!this.state.getCropState().active) {
             return;
         }
 
@@ -458,7 +449,7 @@ export class CropModule extends BaseModule {
      * @param my - The mouse Y position.
      * @returns The active handle, "rect" if inside the rectangle, otherwise null.
      */
-    private _detectHandle(mx: number, my: number): Handle | "rect" | null {
+    private _detectHandle(mx: number, my: number): CropHandle {
         // Check handles first
         for (const handle of Object.values(Handle)) {
             const { x, y } = this._getVisualHandleCoord(handle);
@@ -480,8 +471,8 @@ export class CropModule extends BaseModule {
      * Gets the visual representation of the crop rectangle, ensuring positive width and height.
      * @returns A rectangle with positive dimensions for drawing and hit detection.
      */
-    private _getVisualRect(): Rect {
-        const { x, y, w, h } = this.cropRect;
+    private _getVisualRect(): CropRect {
+        const { x, y, w, h } = this._getCropRect();
         return {
             x: w > 0 ? x : x + w,
             y: h > 0 ? y : y + h,
@@ -514,7 +505,7 @@ export class CropModule extends BaseModule {
      * Updates the canvas cursor style based on the handle being hovered over.
      * @param handle - The handle currently under the cursor.
      */
-    private _updateCursor(handle: Handle | "rect" | null): void {
+    private _updateCursor(handle: CropHandle): void {
         if (handle === "rect") {
             this.canvas.style.cursor = "move";
         } else if (handle) {
@@ -522,5 +513,84 @@ export class CropModule extends BaseModule {
         } else {
             this.canvas.style.cursor = "default";
         }
+    }
+
+    private _getCropRect(): CropRect {
+        return this.state.getCropState().rect;
+    }
+
+    private _setCropRect(rect: CropRect): void {
+        this.state.setCropState({ rect });
+    }
+
+    private _getTouchPoint(event: TouchEvent): { x: number; y: number } | null {
+        const touch = event.touches[0] || event.changedTouches[0];
+        if (!touch) {
+            return null;
+        }
+
+        const bounds = this.canvas.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0) {
+            return null;
+        }
+
+        const scaleX = this.canvas.width / bounds.width;
+        const scaleY = this.canvas.height / bounds.height;
+        return {
+            x: (touch.clientX - bounds.left) * scaleX,
+            y: (touch.clientY - bounds.top) * scaleY,
+        };
+    }
+
+    private _moveRect(rect: CropRect, mx: number, my: number, dragOffsetX: number, dragOffsetY: number): CropRect {
+        return {
+            ...rect,
+            x: mx - dragOffsetX,
+            y: my - dragOffsetY,
+        };
+    }
+
+    private _resizeRect(rect: CropRect, mx: number, my: number, handle: Handle, keepSquare: boolean): CropRect {
+        let { x, y, w, h } = rect;
+
+        switch (handle) {
+            case Handle.NW:
+                w += x - mx;
+                h += y - my;
+                x = mx;
+                y = my;
+                break;
+            case Handle.NE:
+                w = mx - x;
+                h += y - my;
+                y = my;
+                break;
+            case Handle.SW:
+                w += x - mx;
+                h = my - y;
+                x = mx;
+                break;
+            case Handle.SE:
+                w = mx - x;
+                h = my - y;
+                break;
+        }
+
+        return keepSquare ? this._asSquareRect(x, y, w, h) : { x, y, w, h };
+    }
+
+    private _asSquareRect(x: number, y: number, w: number, h: number): CropRect {
+        const absW = Math.abs(w);
+        const absH = Math.abs(h);
+        const signW = w < 0 ? -1 : 1;
+        const signH = h < 0 ? -1 : 1;
+
+        if (absW > absH) {
+            h = signH * absW;
+        } else {
+            w = signW * absH;
+        }
+
+        return { x, y, w, h };
     }
 }

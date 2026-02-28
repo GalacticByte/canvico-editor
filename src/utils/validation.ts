@@ -1,5 +1,11 @@
 const PREFIX = "CanvicoEditor:";
 
+function createEditorError(name: string, message: string): Error {
+    const error = new Error(`${PREFIX} ${message}`);
+    error.name = name;
+    return error;
+}
+
 // --- ERROR FACTORY FUNCTIONS ---
 
 /**
@@ -8,7 +14,7 @@ const PREFIX = "CanvicoEditor:";
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createDOMElementNotFoundError(selector: string): Error {
-    return new Error(`${PREFIX} Required DOM element not found for selector: "${selector}".`);
+    return createEditorError("CanvicoDOMElementNotFoundError", `Required DOM element not found for selector: "${selector}".`);
 }
 
 /**
@@ -17,7 +23,7 @@ export function createDOMElementNotFoundError(selector: string): Error {
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createInvalidInputTypeError(selector: string): Error {
-    return new Error(`${PREFIX} Element for selector "${selector}" is not an <input type="file">.`);
+    return createEditorError("CanvicoInvalidInputTypeError", `Element for selector "${selector}" is not an <input type="file">.`);
 }
 
 /**
@@ -26,7 +32,7 @@ export function createInvalidInputTypeError(selector: string): Error {
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createInvalidFileError(message: string): Error {
-    return new Error(`${PREFIX} Invalid file: ${message}`);
+    return createEditorError("CanvicoInvalidFileError", `Invalid file: ${message}`);
 }
 
 /**
@@ -35,7 +41,7 @@ export function createInvalidFileError(message: string): Error {
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createImageLoadError(details: string = "File could not be read"): Error {
-    return new Error(`${PREFIX} Image load error: ${details}`);
+    return createEditorError("CanvicoImageLoadError", `Image load error: ${details}`);
 }
 
 /**
@@ -43,7 +49,7 @@ export function createImageLoadError(details: string = "File could not be read")
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createCanvasContextError(): Error {
-    return new Error(`${PREFIX} 2D context is not supported by the browser.`);
+    return createEditorError("CanvicoCanvasContextError", "2D context is not supported by the browser.");
 }
 
 /**
@@ -51,17 +57,7 @@ export function createCanvasContextError(): Error {
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createImageSaveError(): Error {
-    return new Error(`${PREFIX} Cannot save because no image is loaded.`);
-}
-
-/**
- * Creates a standardized error for when a module is configured with an incomplete set of selectors.
- * @param {string} moduleName - The name of the module (e.g., 'Resize', 'Crop').
- * @param {string[]} selectors - The list of required selector names for the module.
- * @returns {Error} A new Error object with a descriptive message.
- */
-export function createMissingModuleSelectorsError(moduleName: string, selectors: string[]): Error {
-    return new Error(`${PREFIX} To use the ${moduleName} module, you must provide all of these selectors: ${selectors.join(", ")}.`);
+    return createEditorError("CanvicoImageSaveError", "Cannot save because no image is loaded.");
 }
 
 /**
@@ -70,7 +66,7 @@ export function createMissingModuleSelectorsError(moduleName: string, selectors:
  * @returns {Error} A new Error object with a descriptive message.
  */
 export function createFeatureNotSupportedError(featureName: string): Error {
-    return new Error(`${PREFIX} Required browser feature not supported: ${featureName}.`);
+    return createEditorError("CanvicoFeatureNotSupportedError", `Required browser feature not supported: ${featureName}.`);
 }
 
 // --- VALIDATION FUNCTIONS ---
@@ -83,7 +79,7 @@ export function createFeatureNotSupportedError(featureName: string): Error {
  */
 export function validateFile(file: File, maxFileSizeMB: number): void {
     const maxFileSizeInBytes = maxFileSizeMB * 1024 * 1024;
-    const validTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    const validTypes = ["image/jpeg", "image/png", "image/webp"];
 
     if (!validTypes.includes(file.type)) {
         throw createInvalidFileError(`Unsupported file type. Supported types are: ${validTypes.join(", ")}.`);

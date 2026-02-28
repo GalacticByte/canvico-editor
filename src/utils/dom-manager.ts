@@ -31,6 +31,15 @@ export interface CropDOMElements {
 }
 
 /**
+ * Defines the DOM elements for the Transform module.
+ */
+export interface TransformDOMElements {
+    rotateInput?: HTMLInputElement;
+    flipHorizontalButton?: HTMLButtonElement;
+    flipVerticalButton?: HTMLButtonElement;
+}
+
+/**
  * Manages all DOM interactions for the CanvicoEditor.
  * It queries and validates the existence of all required and optional
  * elements upon instantiation, providing a single, reliable source of DOM nodes.
@@ -45,7 +54,11 @@ export class DOMManager {
     /** Contains DOM elements for the crop module. Undefined if the module is not configured. */
     public readonly cropElements?: CropDOMElements;
 
-    private errorHandler: ErrorHandler;
+    /** Contains DOM elements for the transform module. Undefined if the module is not configured. */
+    public readonly transformElements?: TransformDOMElements;
+
+    private readonly errorHandler: ErrorHandler;
+    private readonly strictModuleSelectors: boolean;
 
     /**
      * Creates an instance of DOMManager.
@@ -55,6 +68,7 @@ export class DOMManager {
      */
     constructor(config: CanvicoEditorConfig, errorHandler: ErrorHandler) {
         this.errorHandler = errorHandler;
+        this.strictModuleSelectors = config.strictModuleSelectors ?? false;
         this.elements = {
             container: this.queryAndValidate<HTMLElement>(config.containerSelector),
             imageFileInput: this.queryAndValidate<HTMLInputElement>(config.imageFileInputSelector, (el) => {
@@ -81,6 +95,20 @@ export class DOMManager {
             activateButton: this.queryAndValidate<HTMLButtonElement>(cfg.activateButtonSelector),
             applyButton: this.queryAndValidate<HTMLButtonElement>(cfg.applyButtonSelector),
         }));
+
+        this.transformElements = this.initializeModuleElements(config.modules?.transform, "Transform", (cfg) => {
+            const elements: TransformDOMElements = {};
+            if (cfg.rotateInputSelector) {
+                elements.rotateInput = this.queryAndValidate<HTMLInputElement>(cfg.rotateInputSelector);
+            }
+            if (cfg.flipHorizontalButtonSelector) {
+                elements.flipHorizontalButton = this.queryAndValidate<HTMLButtonElement>(cfg.flipHorizontalButtonSelector);
+            }
+            if (cfg.flipVerticalButtonSelector) {
+                elements.flipVerticalButton = this.queryAndValidate<HTMLButtonElement>(cfg.flipVerticalButtonSelector);
+            }
+            return elements;
+        });
     }
 
     /**
@@ -115,8 +143,10 @@ export class DOMManager {
         try {
             return extractor(config);
         } catch (error) {
-            console.warn(`DOM elements for ${moduleName} module not found. The module will be disabled.`);
-            this.errorHandler.handle(error as Error);
+            const handledError = this.errorHandler.handle(error, { source: "dom", operation: `initialize-module-elements:${moduleName}` });
+            if (this.strictModuleSelectors) {
+                throw handledError;
+            }
             return undefined;
         }
     }
