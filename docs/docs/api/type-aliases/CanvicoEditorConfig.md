@@ -30,6 +30,14 @@ CSS selector for the file input used to load images.
 
 ***
 
+### logErrorsToConsole?
+
+> `optional` **logErrorsToConsole**: `boolean`
+
+Controls whether handled errors are printed to console. Defaults to `true`.
+
+***
+
 ### maxFileSizeMB?
 
 > `optional` **maxFileSizeMB**: `number`
@@ -46,6 +54,14 @@ Optional container for all module configurations.
 
 ***
 
+### onError?
+
+> `optional` **onError**: [`CanvicoEditorErrorCallback`](CanvicoEditorErrorCallback.md)
+
+Optional callback to report handled runtime errors to host application.
+
+***
+
 ### resetEditsButtonSelector
 
 > **resetEditsButtonSelector**: `string`
@@ -59,3 +75,15 @@ CSS selector for the button that resets the image to its original state.
 > **saveButtonSelector**: `string`
 
 CSS selector for the button that saves/downloads the current image.
+
+***
+
+### strictModuleSelectors?
+
+> `optional` **strictModuleSelectors**: `boolean`
+
+When true, invalid module selectors throw during initialization
+(fail-fast behavior).
+When false, invalid module selectors disable only the affected module
+and report the error through the editor error pipeline.
+Defaults to `false`.

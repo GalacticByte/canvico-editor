@@ -2,39 +2,47 @@ import type { CanvicoEditorConfig, IModule } from "./types.js";
 import { ErrorHandler } from "./utils/error-handler.js";
 import { DOMManager } from "./utils/dom-manager.js";
 import { validateFile, createCanvasContextError, createImageLoadError, createImageSaveError, createFeatureNotSupportedError } from "./utils/validation.js";
+import { CanvasState, type CanvasStateChange, type CropRect } from "./state/CanvasState.js";
 
 // Modules
 import { ResizeModule } from "./modules/ResizeModule.js";
 import { CropModule } from "./modules/CropModule.js";
+import { TransformModule } from "./modules/TransformModule.js";
 
 enum ModuleName {
     RESIZE = "resize",
     CROP = "crop",
+    TRANSFORM = "transform",
 }
 
 export class CanvicoEditor {
     /** Manages all DOM element interactions and selections. */
-    private dom: DOMManager;
+    private readonly dom: DOMManager;
 
-    private canvas: HTMLCanvasElement;
-    private ctx: CanvasRenderingContext2D;
+    private readonly canvas: HTMLCanvasElement;
+    private readonly ctx: CanvasRenderingContext2D;
 
-    /** The original, unmodified image loaded by the user. */
-    private initialImage?: HTMLImageElement;
-    /** The image currently being displayed and edited, including all modifications. */
-    private currentImage?: HTMLImageElement;
+    /** Central shared document state. */
+    private readonly state: CanvasState = new CanvasState();
 
     /** A map holding all registered and initialized modules. */
-    private modules: Map<string, IModule> = new Map();
+    private readonly modules: Map<string, IModule> = new Map();
+    private resizeModule?: ResizeModule;
+    private cropModule?: CropModule;
+    private transformModule?: TransformModule;
 
     /** Handles and logs errors that occur within the editor. */
-    private errorHandler: ErrorHandler;
+    private readonly errorHandler: ErrorHandler;
 
     /** The configuration options passed to the editor upon instantiation. */
-    private config: CanvicoEditorConfig;
+    private readonly config: CanvicoEditorConfig;
 
-    private DEFAULT_MODULE: ModuleName | null = null;
+    private readonly DEFAULT_MODULE: ModuleName | null = null;
     private activeModuleName: ModuleName | null = null;
+    private renderScheduled = false;
+    private cleanupCallbacks: Array<() => void> = [];
+    private isDestroyed = false;
+    private asyncOperationVersion = 0;
 
     /**
      * Creates an instance of CanvasImageEditor.
@@ -42,19 +50,25 @@ export class CanvicoEditor {
      * @throws {Error} If a required feature like FileReader is not supported by the browser.
      */
     constructor(config: CanvicoEditorConfig) {
-        // Assign properties first, so they are available in case of an early error
         this.config = config;
-        this.errorHandler = new ErrorHandler();
+        this.errorHandler = new ErrorHandler({
+            onError: config.onError,
+            logToConsole: config.logErrorsToConsole,
+        });
 
-        if (!window.FileReader) {
-            throw createFeatureNotSupportedError("FileReader API is not supported by this browser.");
+        if (!globalThis.FileReader) {
+            const error = createFeatureNotSupportedError("FileReader API is not supported by this browser.");
+            this.errorHandler.handle(error, { source: "validation", operation: "constructor:file-reader-check" });
+            throw error;
         }
 
-        // All initializations
-        this.dom = new DOMManager(config, this.errorHandler); // Initialize and validate DOM elements
-        [this.canvas, this.ctx] = this._initializeCanvas(); // Create canvas and get context 2d
+        this.dom = new DOMManager(config, this.errorHandler);
+        [this.canvas, this.ctx] = this._initializeCanvas();
         this._registerModules();
         this._bindGlobalEvents();
+
+        const unsubscribe = this.state.subscribe((change) => this._onStateChange(change));
+        this.cleanupCallbacks.push(unsubscribe);
     }
 
     /**
@@ -80,13 +94,16 @@ export class CanvicoEditor {
      * Cleans up all resources, event listeners, and modules to safely remove the editor instance.
      */
     public destroy(): void {
-        // Deactivate any active module
-        this._setActiveModule(null);
+        if (this.isDestroyed) {
+            return;
+        }
+        this.isDestroyed = true;
+        this._cancelPendingAsyncOperations();
 
-        // A simple way to remove all listeners is to replace the nodes.
-        this.dom.elements.imageFileInput.replaceWith(this.dom.elements.imageFileInput.cloneNode(true));
-        this.dom.elements.clearCanvasButton.replaceWith(this.dom.elements.clearCanvasButton.cloneNode(true));
-        this.dom.elements.saveButton.replaceWith(this.dom.elements.saveButton.cloneNode(true));
+        this._setActiveModule(null, false, true);
+
+        this.cleanupCallbacks.forEach((cleanup) => cleanup());
+        this.cleanupCallbacks = [];
 
         this.modules.forEach((module) => module.destroy());
         this.modules.clear();
@@ -96,11 +113,11 @@ export class CanvicoEditor {
      * Resets the current image to its original state, discarding all changes.
      */
     private _resetImage(): void {
-        if (this.initialImage) {
-            this.currentImage = this.initialImage;
-            this._resetCanvasView(this.initialImage);
-            this._setActiveModule(this.DEFAULT_MODULE);
+        if (!this.state.getInitial()) {
+            return;
         }
+        this.state.resetToInitial();
+        this._setActiveModule(this.DEFAULT_MODULE, false, true);
     }
 
     /**
@@ -111,34 +128,40 @@ export class CanvicoEditor {
         this.canvas.width = 0;
         this.canvas.height = 0;
 
-        this.initialImage = undefined;
-        this.currentImage = undefined;
+        this.state.clear();
 
-        // Reset input fields
         if (this.dom.resizeElements) {
             this.dom.resizeElements.widthInput.value = "";
             this.dom.resizeElements.heightInput.value = "";
-            if (this.dom.resizeElements.lockAspectRatio) this.dom.resizeElements.lockAspectRatio.checked = false;
+            if (this.dom.resizeElements.lockAspectRatio) {
+                this.dom.resizeElements.lockAspectRatio.checked = false;
+            }
         }
 
         this.dom.elements.imageFileInput.value = "";
-
-        this._setActiveModule(this.DEFAULT_MODULE);
+        this._setActiveModule(null, false, true);
     }
 
     /**
      * Triggers a download of the current canvas content as a PNG image.
      */
     private _saveImage(): void {
-        if (!this.currentImage) {
-            this.errorHandler.handle(createImageSaveError());
+        if (!this.state.getCurrent()) {
+            this.errorHandler.handle(createImageSaveError(), { source: "editor", operation: "save-image:no-image" });
             return;
         }
+
+        const exportDataUrl = this._exportCurrentViewDataUrl();
+        if (!exportDataUrl) {
+            this.errorHandler.handle(createImageSaveError(), { source: "editor", operation: "save-image:export-failed" });
+            return;
+        }
+
         const link = document.createElement("a");
         const originalFile = this.dom.elements.imageFileInput.files?.[0];
         const baseName = originalFile ? originalFile.name.replace(/\.[^/.]+$/, "") : "image";
         link.download = `${baseName}-edited.png`;
-        link.href = this.canvas.toDataURL("image/png");
+        link.href = exportDataUrl;
         link.click();
     }
 
@@ -148,16 +171,10 @@ export class CanvicoEditor {
      * Binds event listeners to the main control elements like file input, save, and reset buttons.
      */
     private _bindGlobalEvents(): void {
-        this.dom.elements.imageFileInput.addEventListener("change", (e: Event) => this._loadImage(e));
-
-        // Bind module buttons
-        if (this.dom.cropElements) {
-            this.dom.cropElements.activateButton.addEventListener("click", () => this.currentImage && this._setActiveModule(ModuleName.CROP));
-        }
-
-        this.dom.elements.resetEditsButton.addEventListener("click", () => this._resetImage());
-        this.dom.elements.clearCanvasButton.addEventListener("click", () => this._cleanAll());
-        this.dom.elements.saveButton.addEventListener("click", () => this._saveImage());
+        this._addManagedListener(this.dom.elements.imageFileInput, "change", (e: Event) => this._loadImage(e));
+        this._addManagedListener(this.dom.elements.resetEditsButton, "click", () => this._resetImage());
+        this._addManagedListener(this.dom.elements.clearCanvasButton, "click", () => this._cleanAll());
+        this._addManagedListener(this.dom.elements.saveButton, "click", () => this._saveImage());
     }
 
     // --- Core Drawing & State Logic ---
@@ -166,110 +183,165 @@ export class CanvicoEditor {
      * Initializes and registers all available modules based on the provided options.
      */
     private _registerModules(): void {
-        // Register ResizeModule only if its essential inputs are provided
         if (this.dom.resizeElements) {
             const resizeModule = new ResizeModule(this.dom.resizeElements, {
-                container: this.dom.elements.container,
-                canvas: this.canvas,
-                ctx: this.ctx,
-
-                getCurrentImage: () => this.currentImage,
+                state: this.state,
+                errorHandler: this.errorHandler,
             });
             this.modules.set(ModuleName.RESIZE, resizeModule);
-            this.DEFAULT_MODULE = ModuleName.RESIZE;
+            this.resizeModule = resizeModule;
         }
 
-        // Register CropModule only if its essential button is provided
         if (this.dom.cropElements && this.config.modules?.crop) {
             const cropModule = new CropModule(this.dom.cropElements, {
                 canvas: this.canvas,
                 ctx: this.ctx,
                 frameColor: this.config.modules.crop.frameColor,
                 outsideOverlayColor: this.config.modules.crop.outsideOverlayColor,
-                requestRedraw: () => this._redraw(),
-                getCurrentImage: () => this.currentImage,
-                onCropApplied: (newImageDataUrl: string) => this._handleCropApplied(newImageDataUrl),
+                state: this.state,
+                onCropApplied: () => this._handleCropApplied(),
             });
 
             this.modules.set(ModuleName.CROP, cropModule);
+            this.cropModule = cropModule;
+
+            this._addManagedListener(this.dom.cropElements.activateButton, "click", () => this._enterCropMode());
         }
 
-        // Initialize all registered modules
-        this.modules.forEach((module) => module.init());
-        console.log(this.modules);
+        if (this.dom.transformElements) {
+            const transformModule = new TransformModule(this.dom.transformElements, {
+                state: this.state,
+            });
+            this.modules.set(ModuleName.TRANSFORM, transformModule);
+            this.transformModule = transformModule;
+        }
 
-        // Set the Resize module as active by default
-        this._setActiveModule(this.DEFAULT_MODULE);
+        this.modules.forEach((module) => module.init());
+        this._setActiveModule(this.DEFAULT_MODULE, false, true);
+    }
+
+    private _addManagedListener(target: EventTarget, type: string, handler: EventListenerOrEventListenerObject): void {
+        target.addEventListener(type, handler);
+        this.cleanupCallbacks.push(() => target.removeEventListener(type, handler));
+    }
+
+    private _getOutputDimensions(img: HTMLImageElement): { width: number; height: number } {
+        const resizeState = this.state.getResizeState();
+        const width = resizeState.width > 0 ? resizeState.width : img.width;
+        const height = resizeState.height > 0 ? resizeState.height : img.height;
+
+        return {
+            width: Math.max(1, Math.round(width)),
+            height: Math.max(1, Math.round(height)),
+        };
+    }
+
+    private _getPreviewDimensions(outputWidth: number, outputHeight: number): { width: number; height: number } {
+        const containerWidth = Math.max(this.dom.elements.container.clientWidth, 1);
+        const containerHeight = Math.max(this.dom.elements.container.clientHeight, 1);
+        const scale = Math.min(containerWidth / outputWidth, containerHeight / outputHeight, 1);
+
+        return {
+            width: Math.max(1, Math.round(outputWidth * scale)),
+            height: Math.max(1, Math.round(outputHeight * scale)),
+        };
     }
 
     /**
      * Resets the canvas to display the given image, scaled to fit the container.
-     * @param {HTMLImageElement} image - The image to display.
-     * @internal
+     * This should ONLY be called when loading a new image or explicitly resetting the view.
      */
     private _resetCanvasView(image: HTMLImageElement): void {
-        this.currentImage = image;
+        const { width: outputWidth, height: outputHeight } = this._getOutputDimensions(image);
+        const { width: previewWidth, height: previewHeight } = this._getPreviewDimensions(outputWidth, outputHeight);
 
-        const containerWidth = this.dom.elements.container.clientWidth;
-        const containerHeight = this.dom.elements.container.clientHeight;
-        const scale = Math.min(containerWidth / image.width, containerHeight / image.height);
-
-        const drawW = image.width * scale;
-        const drawH = image.height * scale;
-
-        this.canvas.width = drawW;
-        this.canvas.height = drawH;
-
-        this._redraw();
+        this.canvas.width = previewWidth;
+        this.canvas.height = previewHeight;
 
         if (this.dom.resizeElements) {
-            this.dom.resizeElements.widthInput.value = Math.round(drawW).toString();
-            this.dom.resizeElements.heightInput.value = Math.round(drawH).toString();
+            this.dom.resizeElements.widthInput.value = outputWidth.toString();
+            this.dom.resizeElements.heightInput.value = outputHeight.toString();
         }
+
+        this._requestRender();
     }
 
     /**
-     * Sets which module is currently active, deactivating all others.
-     * If the same module is activated again (and it's not the default), it toggles it off,
-     * returning to the default module.
-     * @param {ModuleName | null} moduleName - The name of the module to activate, or null to deactivate all.
-     * @internal
+     * Sets which module is currently active.
+     * Crop mode disables interactions with the remaining modules until exited or applied.
      */
-    private _setActiveModule(moduleName: ModuleName | null): void {
+    private _setActiveModule(moduleName: ModuleName | null, shouldToggle: boolean = true, force: boolean = false): void {
         let newActiveModuleName = moduleName;
 
-        // If we try to activate a module that is already active (and it's not the default module),
-        // we switch back to the default module. This creates a 'toggle' effect.
-        if (this.activeModuleName === moduleName && moduleName !== this.DEFAULT_MODULE) {
+        if (shouldToggle && this.activeModuleName === moduleName && moduleName !== this.DEFAULT_MODULE) {
             newActiveModuleName = this.DEFAULT_MODULE;
         }
 
-        //  If the state doesn't change, do nothing.
-        if (this.activeModuleName === newActiveModuleName) {
+        if (!force && this.activeModuleName === newActiveModuleName) {
             return;
         }
 
         this.activeModuleName = newActiveModuleName;
+        const hasImage = Boolean(this.state.getCurrent());
 
-        this.modules.forEach((module, name) => {
-            if (name === this.activeModuleName) {
-                module.activate();
+        if (this.activeModuleName === ModuleName.CROP && hasImage) {
+            this.state.setMode("crop");
+            this.resizeModule?.deactivate();
+            this.transformModule?.deactivate();
+            this.cropModule?.activate();
+            this._toggleNonCropInteractions(false);
+        } else {
+            this.state.setMode("edit");
+            this.cropModule?.deactivate();
+            this._toggleNonCropInteractions(true);
+
+            if (hasImage) {
+                this.resizeModule?.activate();
+                this.transformModule?.activate();
             } else {
-                module.deactivate();
+                this.resizeModule?.deactivate();
+                this.transformModule?.deactivate();
             }
-        });
-        this._redraw();
+        }
+
+        this._requestRender();
+    }
+
+    /**
+     * Disables or enables UI elements for Resize and Transform modules.
+     */
+    private _toggleNonCropInteractions(enable: boolean): void {
+        const disabled = !enable;
+
+        if (this.dom.resizeElements) {
+            this.dom.resizeElements.widthInput.disabled = disabled;
+            this.dom.resizeElements.heightInput.disabled = disabled;
+            if (this.dom.resizeElements.lockAspectRatio) {
+                this.dom.resizeElements.lockAspectRatio.disabled = disabled;
+            }
+        }
+
+        if (this.dom.transformElements) {
+            const t = this.dom.transformElements;
+            if (t.rotateInput) t.rotateInput.disabled = disabled;
+            if (t.flipHorizontalButton) t.flipHorizontalButton.disabled = disabled;
+            if (t.flipVerticalButton) t.flipVerticalButton.disabled = disabled;
+        }
+
+        this.dom.elements.clearCanvasButton.disabled = disabled;
+        this.dom.elements.resetEditsButton.disabled = disabled;
     }
 
     // --- Event Handlers & Callbacks ---
 
     /**
      * Handles the file input change event to load, validate, and display an image.
-     * @param {Event} event - The file input change event.
-     * @internal
      */
     private _loadImage(event: Event): void {
-        // If no file input element is available, do nothing
+        if (this.isDestroyed) {
+            return;
+        }
+
         try {
             const target = event.target as HTMLInputElement;
             const file = target.files?.[0];
@@ -279,68 +351,289 @@ export class CanvicoEditor {
 
             validateFile(file, this.config.maxFileSizeMB || 5);
 
+            const operationVersion = this._beginAsyncOperation();
             const reader = new FileReader();
             reader.onload = (e) => {
+                if (!this._isAsyncOperationActive(operationVersion)) {
+                    return;
+                }
+
+                const result = e.target?.result;
+                if (typeof result !== "string") {
+                    this.errorHandler.handle(createImageLoadError("Unexpected image format from FileReader."), {
+                        source: "editor",
+                        operation: "load-image:reader-result",
+                    });
+                    return;
+                }
+
                 const img = new Image();
                 img.onload = () => {
-                    try {
-                        this.currentImage = img;
-                        this.initialImage = img;
+                    if (!this._isAsyncOperationActive(operationVersion)) {
+                        return;
+                    }
 
-                        this._resetCanvasView(img);
+                    try {
+                        this.state.setInitial(img);
+                        this._setActiveModule(this.DEFAULT_MODULE, false, true);
                     } catch (error) {
-                        this.errorHandler.handle(error as Error);
+                        this.errorHandler.handle(error, { source: "state", operation: "load-image:set-initial" });
                     }
                 };
                 img.onerror = () => {
-                    this.errorHandler.handle(createImageLoadError("Error reading image file."));
+                    if (!this._isAsyncOperationActive(operationVersion)) {
+                        return;
+                    }
+                    this.errorHandler.handle(createImageLoadError("Error reading image file."), { source: "editor", operation: "load-image:image-read" });
                 };
-                img.src = e.target!.result as string;
+                img.src = result;
             };
             reader.onerror = () => {
-                this.errorHandler.handle(createImageLoadError("Error reading file with FileReader."));
+                if (!this._isAsyncOperationActive(operationVersion)) {
+                    return;
+                }
+                this.errorHandler.handle(createImageLoadError("Error reading file with FileReader."), { source: "editor", operation: "load-image:file-reader" });
             };
             reader.readAsDataURL(file);
         } catch (error) {
-            this.errorHandler.handle(error as Error);
+            this.errorHandler.handle(error, { source: "validation", operation: "load-image:validate-file" });
         }
     }
 
     /**
-     * Callback for the CropModule after a crop is applied. Updates the current image with the cropped version.
-     * @param {string} newImageDataUrl - The data URL of the newly cropped image.
-     * @internal
+     * Callback for the CropModule after a crop is applied.
      */
-    private _handleCropApplied(newImageDataUrl: string): void {
-        const newImg = new Image();
-        newImg.onload = () => {
-            this.currentImage = newImg;
+    private _handleCropApplied(): void {
+        const dataUrl = this._bakeCrop();
+        if (dataUrl) {
+            void this._applyCropAndExit(dataUrl);
+        }
+    }
 
-            this._setActiveModule(this.DEFAULT_MODULE);
+    private async _applyCropAndExit(newImageDataUrl: string): Promise<void> {
+        try {
+            await this._applyImageDataUrl(newImageDataUrl);
+        } catch (error) {
+            if (!this._isAbortError(error)) {
+                this.errorHandler.handle(error, { source: "editor", operation: "apply-crop:apply-image" });
+            }
+            return;
+        }
 
-            this._resetCanvasView(newImg);
-        };
-        newImg.src = newImageDataUrl;
+        if (this.isDestroyed) {
+            return;
+        }
+
+        this._setActiveModule(this.DEFAULT_MODULE, false, true);
+        const croppedImage = this.state.getCurrent();
+        if (croppedImage) {
+            const { lockAspectRatio } = this.state.getResizeState();
+            this.state.setResizeState({
+                width: croppedImage.width,
+                height: croppedImage.height,
+                lockAspectRatio,
+            });
+        }
+        this.state.setTransformState({ rotate: 0, flipH: false, flipV: false });
+        this.transformModule?.activate();
+    }
+
+    private _applyImageDataUrl(dataUrl: string): Promise<void> {
+        const operationVersion = this._beginAsyncOperation();
+
+        return new Promise((resolve, reject) => {
+            const newImg = new Image();
+            newImg.onload = () => {
+                if (!this._isAsyncOperationActive(operationVersion)) {
+                    reject(this._createAbortError("Image apply operation was canceled."));
+                    return;
+                }
+                this.state.setCurrent(newImg);
+                resolve();
+            };
+            newImg.onerror = () => {
+                if (!this._isAsyncOperationActive(operationVersion)) {
+                    reject(this._createAbortError("Image apply operation was canceled."));
+                    return;
+                }
+                reject(createImageLoadError("Error applying image data to canvas."));
+            };
+            newImg.src = dataUrl;
+        });
+    }
+
+    private _onStateChange(change: CanvasStateChange): void {
+        if (change === "clear") {
+            this.transformModule?.syncControlsWithState();
+            this._requestRender();
+            return;
+        }
+
+        const img = this.state.getCurrent();
+        if (!img) {
+            this.transformModule?.syncControlsWithState();
+            this._requestRender();
+            return;
+        }
+
+        if (change === "image" || change === "resize") {
+            if (change === "image") {
+                this.transformModule?.syncControlsWithState();
+            }
+            this._resetCanvasView(img);
+            return;
+        }
+
+        this._requestRender();
+    }
+
+    private _enterCropMode(): void {
+        if (!this.state.getCurrent()) {
+            return;
+        }
+        this._setActiveModule(ModuleName.CROP);
     }
 
     // --- Module Management ---
 
+    private _requestRender(): void {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        if (this.renderScheduled) {
+            return;
+        }
+
+        this.renderScheduled = true;
+        globalThis.requestAnimationFrame(() => {
+            this.renderScheduled = false;
+            if (this.isDestroyed) {
+                return;
+            }
+            this._redraw();
+        });
+    }
+
     /**
      * Clears the canvas, redraws the base image, and then draws the overlay for the currently active module.
-     * @internal
      */
     private _redraw(): void {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        if (!this.currentImage) {
+        const img = this.state.getCurrent();
+        if (!img) {
             return;
         }
-        this.ctx.drawImage(this.currentImage, 0, 0, this.currentImage.width, this.currentImage.height, 0, 0, this.canvas.width, this.canvas.height);
 
-        if (this.activeModuleName) {
-            const activeModule = this.modules.get(this.activeModuleName);
-            // The 'drawOverlay' method is optional, so we check for its existence before calling.
-            activeModule?.drawOverlay?.();
+        this._drawImageLayer(this.ctx, img, this.canvas.width, this.canvas.height);
+
+        if (this.activeModuleName === ModuleName.CROP) {
+            this.cropModule?.drawOverlay?.();
         }
+    }
+
+    private _drawImageLayer(targetCtx: CanvasRenderingContext2D, img: HTMLImageElement, targetWidth: number, targetHeight: number): void {
+        const transformState = this.state.getTransformState();
+        const cx = targetWidth / 2;
+        const cy = targetHeight / 2;
+
+        targetCtx.save();
+        targetCtx.translate(cx, cy);
+        targetCtx.rotate((transformState.rotate * Math.PI) / 180);
+        targetCtx.scale(transformState.flipH ? -1 : 1, transformState.flipV ? -1 : 1);
+        targetCtx.drawImage(img, -cx, -cy, targetWidth, targetHeight);
+        targetCtx.restore();
+    }
+
+    private _exportCurrentViewDataUrl(): string | null {
+        const img = this.state.getCurrent();
+        if (!img) return null;
+        const { width: outputWidth, height: outputHeight } = this._getOutputDimensions(img);
+
+        const offscreen = document.createElement("canvas");
+        offscreen.width = outputWidth;
+        offscreen.height = outputHeight;
+        const offscreenCtx = offscreen.getContext("2d");
+        if (!offscreenCtx) return null;
+
+        this._drawImageLayer(offscreenCtx, img, offscreen.width, offscreen.height);
+        return offscreen.toDataURL("image/png");
+    }
+
+    /**
+     * Creates a new image based on the current crop state.
+     * Crop rectangle is defined in preview space and remapped to output space.
+     */
+    private _bakeCrop(): string | null {
+        const img = this.state.getCurrent();
+        const cropState = this.state.getCropState();
+        if (!img || !cropState.active) return null;
+
+        const rect = this._normalizeRect(cropState.rect);
+        const previewWidth = this.canvas.width;
+        const previewHeight = this.canvas.height;
+        if (previewWidth <= 0 || previewHeight <= 0) return null;
+
+        const { width: outputWidth, height: outputHeight } = this._getOutputDimensions(img);
+        const scaleX = outputWidth / previewWidth;
+        const scaleY = outputHeight / previewHeight;
+
+        const sx = Math.max(0, Math.floor(rect.x * scaleX));
+        const sy = Math.max(0, Math.floor(rect.y * scaleY));
+        const maxW = outputWidth - sx;
+        const maxH = outputHeight - sy;
+        const sw = Math.min(Math.floor(rect.w * scaleX), Math.floor(maxW));
+        const sh = Math.min(Math.floor(rect.h * scaleY), Math.floor(maxH));
+
+        if (sw <= 0 || sh <= 0) return null;
+
+        const transformedCanvas = document.createElement("canvas");
+        transformedCanvas.width = outputWidth;
+        transformedCanvas.height = outputHeight;
+        const transformedCtx = transformedCanvas.getContext("2d");
+        if (!transformedCtx) return null;
+        this._drawImageLayer(transformedCtx, img, transformedCanvas.width, transformedCanvas.height);
+
+        const offscreen = document.createElement("canvas");
+        offscreen.width = sw;
+        offscreen.height = sh;
+        const offscreenCtx = offscreen.getContext("2d");
+        if (!offscreenCtx) return null;
+
+        offscreenCtx.drawImage(transformedCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        return offscreen.toDataURL("image/png");
+    }
+
+    private _normalizeRect(rect: CropRect): CropRect {
+        return {
+            x: rect.w >= 0 ? rect.x : rect.x + rect.w,
+            y: rect.h >= 0 ? rect.y : rect.y + rect.h,
+            w: Math.abs(rect.w),
+            h: Math.abs(rect.h),
+        };
+    }
+
+    private _beginAsyncOperation(): number {
+        this.asyncOperationVersion += 1;
+        return this.asyncOperationVersion;
+    }
+
+    private _cancelPendingAsyncOperations(): void {
+        this.asyncOperationVersion += 1;
+    }
+
+    private _isAsyncOperationActive(operationVersion: number): boolean {
+        return !this.isDestroyed && operationVersion === this.asyncOperationVersion;
+    }
+
+    private _createAbortError(message: string): Error {
+        const error = new Error(message);
+        error.name = "AbortError";
+        return error;
+    }
+
+    private _isAbortError(error: unknown): boolean {
+        return error instanceof Error && error.name === "AbortError";
     }
 }

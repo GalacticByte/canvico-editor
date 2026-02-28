@@ -1,4 +1,4 @@
-import type { IModule, ModuleEventHandler } from "../types.js";
+import type { IModule } from "../types.js";
 
 /**
  * Base class for all editor modules. It provides a centralized way to manage
@@ -13,9 +13,10 @@ export abstract class BaseModule implements IModule {
      * allowing for easy removal in the `destroy` method.
      */
     protected eventHandlers: Array<{
-        element: HTMLElement;
+        element: EventTarget;
         type: string;
-        handler: ModuleEventHandler;
+        handler: EventListenerOrEventListenerObject;
+        options?: boolean | AddEventListenerOptions;
     }> = [];
 
     /**
@@ -56,8 +57,8 @@ export abstract class BaseModule implements IModule {
      * This method iterates over all registered event listeners and removes them.
      */
     public destroy(): void {
-        this.eventHandlers.forEach(({ element, type, handler }) => {
-            element.removeEventListener(type, handler);
+        this.eventHandlers.forEach(({ element, type, handler, options }) => {
+            element.removeEventListener(type, handler, options);
         });
         this.eventHandlers = [];
     }
@@ -68,8 +69,9 @@ export abstract class BaseModule implements IModule {
      * @param type The event name (e.g., "click", "mousedown", "input").
      * @param handler The event handler function.
      */
-    protected addEventListener(el: HTMLElement, type: string, handler: ModuleEventHandler): void {
-        el.addEventListener(type, handler);
-        this.eventHandlers.push({ element: el, type, handler });
+    protected addEventListener<TEvent extends Event>(el: EventTarget, type: string, handler: (event: TEvent) => void, options?: boolean | AddEventListenerOptions): void {
+        const listener = handler as EventListener;
+        el.addEventListener(type, listener, options);
+        this.eventHandlers.push({ element: el, type, handler: listener, options });
     }
 }
